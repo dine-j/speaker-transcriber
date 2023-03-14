@@ -1,0 +1,6 @@
+git+https://github.com/openai/whisper.git
+torch>=1.13.1
+pyannote.audio>=2.1.1
+pydub
+torchaudio>=0.11.0
+torchvision==0.10.0
