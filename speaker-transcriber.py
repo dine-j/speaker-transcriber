@@ -49,12 +49,16 @@ def get_time(file_name):
 
 def diarize(auth_token, audio, audio_format, n_speakers):
     pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization", use_auth_token=auth_token)
+    pipeline.to(check_device())
     padding_in_seconds = 2
     prep_audio_filename = 'input_prep.wav'
     prep_audio = prepare_audio_for_diarization(audio, audio_format, padding_in_seconds, prep_audio_filename)
 
     print("Diarizing start")
-    diarization = pipeline(prep_audio_filename, min_speakers=n_speakers)
+    if n_speakers == 0:
+        diarization = pipeline(prep_audio_filename)
+    else:
+        diarization = pipeline(prep_audio_filename, num_speakers=n_speakers)
     print("Diarizing done; splitting into files")
     for turn, _, speaker in diarization.itertracks(yield_label=True):
         split = prep_audio[turn.start * 1000:turn.end * 1000]
@@ -76,7 +80,7 @@ def transcribe():
     listdir = os.listdir("splits/")
     filteredlist = filter(lambda x: 'wav' in x, listdir)
     sortedlist = sorted(filteredlist, key=lambda x: get_time(x))
-    model = whisper.load_model("small.en", device=check_device())
+    model = whisper.load_model("small.en", device=torch.device(check_device()))
     for filename in sortedlist:
         text += get_result(model, "splits/" + filename)
         text += "\n\n"
@@ -97,7 +101,7 @@ def main():
         if opt in ['-a', '--audio']:
             audio = arg
         elif opt in ['-d', '--diarize']:
-            should_diarize = arg
+            should_diarize = arg == "True"
         elif opt in ['-s', '--n_speakers']:
             n_speakers = int(arg)
         elif opt in ['-t', '--token']:
