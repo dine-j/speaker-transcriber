@@ -16,15 +16,6 @@ from pydub import AudioSegment
 pattern = r"(\d*\d\:\d\d\:\d\d[\.\d+]*)\-(SPEAKER\_\d\d)"
 
 
-def check_device():
-    """Check CUDA availability."""
-    if torch.cuda.is_available() == 1:
-        device = "cuda"
-    else:
-        device = "cpu"
-    return device
-
-
 def get_result(model, audio_file):
     matches = re.finditer(pattern, audio_file)
     hour = ""
@@ -49,7 +40,7 @@ def get_time(file_name):
 
 def diarize(auth_token, audio, audio_format, n_speakers):
     pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization", use_auth_token=auth_token)
-    pipeline.to(check_device())
+    pipeline.to('cuda')
     padding_in_seconds = 2
     prep_audio_filename = 'input_prep.wav'
     prep_audio = prepare_audio_for_diarization(audio, audio_format, padding_in_seconds, prep_audio_filename)
@@ -80,7 +71,7 @@ def transcribe():
     listdir = os.listdir("splits/")
     filteredlist = filter(lambda x: 'wav' in x, listdir)
     sortedlist = sorted(filteredlist, key=lambda x: get_time(x))
-    model = whisper.load_model("small.en", device=torch.device(check_device()))
+    model = whisper.load_model("small.en", device=torch.device('cuda'))
     for filename in sortedlist:
         text += get_result(model, "splits/" + filename)
         text += "\n\n"
