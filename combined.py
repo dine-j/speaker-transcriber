@@ -8,26 +8,14 @@ import sys
 import torch
 import whisper
 import os
-import datetime
 
+from whisper.utils import format_timestamp
 from pyannote.audio import Pipeline
 from pydub import AudioSegment
 
 pattern = r"(\d*\d\:\d\d\:\d\d[\.\d+]*)\-(SPEAKER\_\d\d)"
-
-
-def get_result(model, audio_file):
-    matches = re.finditer(pattern, audio_file)
-    hour = ""
-    speaker = ""
-    for m in matches:
-        hour = m.group(1)
-        speaker = m.group(2)
-
-    text = "[" + hour + "] " + speaker + ":\n"
-    result = model.transcribe(audio_file)
-    text += result["text"]
-    return text
+padding_in_seconds = 2
+prep_audio_filename = 'input_prep.wav'
 
 
 def get_time(file_name):
@@ -38,45 +26,50 @@ def get_time(file_name):
     return time
 
 
-def diarize(auth_token, audio, audio_format, n_speakers):
+def diarize(auth_token, n_speakers):
     pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization", use_auth_token=auth_token)
     pipeline.to('cuda')
-    padding_in_seconds = 2
-    prep_audio_filename = 'input_prep.wav'
-    prep_audio = prepare_audio_for_diarization(audio, audio_format, padding_in_seconds, prep_audio_filename)
 
     print("Diarizing start")
     if n_speakers == 0:
         diarization = pipeline(prep_audio_filename)
     else:
         diarization = pipeline(prep_audio_filename, num_speakers=n_speakers)
-    print("Diarizing done; splitting into files")
-    for turn, _, speaker in diarization.itertracks(yield_label=True):
-        split = prep_audio[turn.start * 1000:turn.end * 1000]
-        split.export('splits/' + str(datetime.timedelta(seconds=turn.start-padding_in_seconds)) + '-' + str(speaker) + '.wav',
-                     format='wav')
-    print("Split done")
     return diarization
 
 
-def prepare_audio_for_diarization(audio, audio_format, padding_in_seconds, prep_audio_filename):
+def prepare_audio_for_diarization(audio, audio_format):
     sound = AudioSegment.from_file(audio, audio_format)
     spacer = AudioSegment.silent(duration=padding_in_seconds * 1000)
     sound = spacer.append(sound, crossfade=0)
     sound.export(prep_audio_filename, format='wav')
+    print("Input sound created")
     return sound
 
 
-def transcribe():
-    text = ""
-    listdir = os.listdir("splits/")
-    filteredlist = filter(lambda x: 'wav' in x, listdir)
-    sortedlist = sorted(filteredlist, key=lambda x: get_time(x))
+def transcribe(audio_file):
+    print("Transcribing text")
     model = whisper.load_model("small.en", device=torch.device('cuda'))
-    for filename in sortedlist:
-        text += get_result(model, "splits/" + filename)
-        text += "\n\n"
-    return text
+    return model.transcribe(audio_file)
+
+
+def format_result_speaker(file_name, segments, speakers):
+    """Put a newline character after each sentence."""
+    text = ""
+    prev_speaker = ""
+
+    for segment in segments:
+        speaker = "SPEAKER"
+        if segment['id'] in speakers.keys():
+            speaker = speakers[segment['id']]
+
+        if speaker != prev_speaker or (speaker == prev_speaker and speaker == "SPEAKER"):
+            text += "[" + format_timestamp(segment["start"]) + "] " + speaker + ":\n"
+            prev_speaker = speaker
+        text += segment['text'] + "\n\n"
+    with open(file_name, 'a', encoding="utf-8") as file:
+        print("Writing transcription to text file")
+        file.write(text)
 
 
 def main():
@@ -104,15 +97,32 @@ def main():
     extension = audio_info[1]
 
     if should_diarize:
-        diarization = diarize(auth_token=auth_token, audio=audio, audio_format=extension, n_speakers=n_speakers)
+        prepare_audio_for_diarization(audio, extension)
+        diarization = diarize(auth_token=auth_token, n_speakers=n_speakers)
 
     print("Transcription start")
-    text = transcribe()
+    transcription = transcribe(prep_audio_filename)
     print("Transcription done")
 
-    print("Writing to file")
-    with open(filename + ".txt", 'a', encoding="utf-8") as file:
-        file.write(text)
+    print("Matching speakers with segments")
+    diarization_speakers = []
+    for turn, _, speaker in diarization.itertracks(yield_label=True):
+        diarization_speakers.append({
+            'start': turn.start,
+            'end': turn.end,
+            'speaker': speaker
+        })
+    speakers = {}
+    for segment in transcription["segments"]:
+        max_overlap = 0
+        for ds in diarization_speakers:
+            overlap = min(ds['end'], segment['end']) - max(ds['start'], segment['start'])
+            if overlap >= max_overlap:
+                max_overlap = overlap
+                speakers[segment['id']] = ds['speaker']
+
+    format_result_speaker(filename + ".txt", transcription["segments"], speakers)
+    os.remove(prep_audio_filename)
 
 
 if __name__ == "__main__":
